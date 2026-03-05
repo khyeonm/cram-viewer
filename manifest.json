@@ -1,0 +1,10 @@
+{
+  "name": "cram-viewer",
+  "version": "1.0.0",
+  "description": "CRAM alignment summary viewer with container metadata, reference information, and file structure display",
+  "extensions": [
+    "cram"
+  ],
+  "entry": "index.js",
+  "style": "style.css"
+}
