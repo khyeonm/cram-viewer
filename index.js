@@ -55,7 +55,7 @@
   }
 
   function _renderIgv(container, fileUrl, filename) {
-    container.innerHTML = '<div id="__igv_div__">Loading IGV.js...</div>';
+    container.innerHTML = '<div id="__igv_div__" class="ap-loading">Loading...</div>';
     _loadIgvJs().then(function() {
       var div = document.getElementById('__igv_div__');
       if (!div) return;
