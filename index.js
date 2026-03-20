@@ -102,6 +102,7 @@
   window.AutoPipePlugin = {
     render: function(container, fileUrl, filename) {
       _container = container;
+      _container.innerHTML = '<div class="ap-loading">Loading...</div>';
       _selectedGenome = null;
 
       _fetchReference().then(function() {
