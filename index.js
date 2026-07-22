@@ -23,6 +23,7 @@
   var _igvRef = null;
   var _selectedGenome = null;
   var _igvBrowser = null;
+  var _decodeObserver = null;
 
   // Width of the region IGV opens at. Alignment tracks stop rendering past
   // their 30kb visibility window; 2kb keeps individual reads legible as bands.
@@ -41,6 +42,10 @@
   }
 
   function _disposeIgvBrowser() {
+    if (_decodeObserver) {
+      _decodeObserver.disconnect();
+      _decodeObserver = null;
+    }
     if (_igvBrowser) {
       // The host never calls destroy(), and igv.js keeps every browser it
       // creates in a module-level list. Without this, each re-render leaks a
@@ -185,6 +190,44 @@
     return html;
   }
 
+  // igv.js decodes CRAM with cram-js, which cannot read every file — a large,
+  // many-contig reference is the case seen in practice. The track catches the
+  // failure itself and just prints "Error loading track data", so nothing
+  // reaches createBrowser's promise. Watch for that message and explain what to
+  // do about it; detecting the real failure beats guessing a size threshold.
+  function _watchDecodeFailure(container, div) {
+    if (typeof MutationObserver === 'undefined') return null;
+
+    function check() {
+      var msg = div.querySelector('.igv-viewport-message');
+      if (!msg || !/error loading track data/i.test(msg.textContent || '')) return false;
+      if (container.querySelector('.cram-decode-note')) return true;
+
+      var note = document.createElement('div');
+      note.className = 'cram-decode-note';
+      note.style.cssText = 'padding:10px 14px;margin-bottom:10px;border-radius:4px;' +
+        'background:#fff8e1;border:1px solid #ffe082;color:#795548;font-size:13px;line-height:1.6';
+      note.innerHTML =
+        '<b>This CRAM could not be decoded in the browser.</b><br>' +
+        'igv.js cannot read every CRAM — files written against a large, ' +
+        'many-contig reference are the known case. Convert it to BAM to view it here:' +
+        '<pre style="margin:6px 0 0;padding:8px;background:#fff;border-radius:3px;' +
+        'font-size:12px;overflow:auto">samtools view -b -T &lt;reference&gt; ' +
+        'file.cram &gt; file.bam\nsamtools index file.bam</pre>';
+      container.insertBefore(note, container.firstChild);
+      return true;
+    }
+
+    // Event-driven rather than polled: the failure can surface at any point
+    // during track loading, and a timer would either fire too early or linger.
+    var observer = new MutationObserver(function() {
+      if (check()) observer.disconnect();
+    });
+    observer.observe(div, { childList: true, subtree: true, characterData: true });
+    check();
+    return observer;
+  }
+
   function _renderIgv(container, fileUrl, filename) {
     _disposeIgvBrowser();
     container.innerHTML = '';
@@ -234,6 +277,7 @@
         // an unhandled rejection and leave a blank pane with no explanation.
         return igv.createBrowser(div, opts).then(function(browser) {
           _igvBrowser = browser;
+          _decodeObserver = _watchDecodeFailure(container, div);
         });
       });
     }).catch(function(e) {
