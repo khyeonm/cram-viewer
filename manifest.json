@@ -1,6 +1,6 @@
 {
   "name": "cram-viewer",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "CRAM alignment summary viewer with container metadata, reference information, and file structure display",
   "extensions": [
     "cram"

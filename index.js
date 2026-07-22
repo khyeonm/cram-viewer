@@ -73,22 +73,75 @@
 
   // Without an explicit locus igv.js opens at the whole first chromosome (or
   // the whole genome when the reference has several contigs), which is far past
-  // the alignment track's visibility window — the track renders nothing.
-  //
-  // CRAM has no /data/ source to read a first alignment from, so fall back to
-  // the head of the reference's first contig. That leaves the track live and
-  // navigable instead of permanently blank; jumping straight to the first read
-  // would need a server-side data source like the one bam-viewer has.
-  function _resolveLocus(refIndexUrl) {
-    if (!refIndexUrl) return Promise.resolve(null);
+  // the alignment track's visibility window — the track renders nothing. So the
+  // opening view has to be anchored where reads actually are.
+
+  function _inflateGzip(bytes) {
+    var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).text();
+  }
+
+  // Contig names in reference order. A CRAI addresses references by index, and
+  // a CRAM's @SQ list is built from the reference it was written against, so
+  // the .fai line order is the mapping back to names.
+  function _readFaiNames(refIndexUrl) {
     return fetch(refIndexUrl)
-      .then(function(r) { return r.ok ? r.text() : null; })
-      .then(function(text) {
-        var line = text && text.split('\n')[0];
-        var name = line && line.split('\t')[0];
-        return name ? name + ':1-' + IGV_WINDOW : null;
+      .then(function(r) {
+        if (!r.ok) throw new Error('fai fetch failed: ' + r.status);
+        return r.text();
       })
-      .catch(function() { return null; });
+      .then(function(text) {
+        return text.split('\n')
+          .filter(function(l) { return l.trim(); })
+          .map(function(l) { return l.split('\t')[0]; });
+      });
+  }
+
+  // A CRAI is a gzipped TSV of
+  //   seqId  alnStart  alnSpan  containerOffset  sliceOffset  sliceSize
+  // one line per slice. The first line with a real reference id is the first
+  // placed alignment in the file.
+  function _readCraiFirst(indexUrl) {
+    return fetch(indexUrl)
+      .then(function(r) {
+        if (!r.ok) throw new Error('crai fetch failed: ' + r.status);
+        return r.arrayBuffer();
+      })
+      .then(_inflateGzip)
+      .then(function(text) {
+        var lines = text.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          var f = lines[i].split('\t');
+          if (f.length < 2) continue;
+          var seqId = parseInt(f[0], 10);
+          var start = parseInt(f[1], 10);
+          if (seqId >= 0 && start >= 1) return { seqId: seqId, start: start };
+        }
+        throw new Error('index contains no placed alignments');
+      });
+  }
+
+  function _resolveLocus(refIndexUrl, trackIndexUrl) {
+    // Preferred: the first alignment recorded in the CRAM index.
+    var viaIndex = (trackIndexUrl && refIndexUrl && typeof DecompressionStream !== 'undefined')
+      ? Promise.all([_readCraiFirst(trackIndexUrl), _readFaiNames(refIndexUrl)])
+          .then(function(res) {
+            var name = res[1][res[0].seqId];
+            if (!name) return null;
+            var start = Math.max(1, res[0].start - Math.floor(IGV_WINDOW * 0.1));
+            return name + ':' + start + '-' + (start + IGV_WINDOW);
+          })
+          .catch(function() { return null; })
+      : Promise.resolve(null);
+
+    // Fallback: the head of the reference's first contig. Leaves the track live
+    // and navigable rather than blank, even if no reads happen to be there.
+    return viaIndex.then(function(locus) {
+      if (locus || !refIndexUrl) return locus;
+      return _readFaiNames(refIndexUrl)
+        .then(function(names) { return names[0] ? names[0] + ':1-' + IGV_WINDOW : null; })
+        .catch(function() { return null; });
+    });
   }
 
   function _fetchReference() {
@@ -150,7 +203,7 @@
       isKnownGenome ? Promise.resolve(null) : _findIndex(_refUrl(activeRef), ['fai'])
     ]).then(function(results) {
       var trackIndex = results[1], refIndex = results[2];
-      return _resolveLocus(refIndex).then(function(locus) {
+      return _resolveLocus(refIndex, trackIndex).then(function(locus) {
         // The user may have switched views while the probes were in flight.
         if (!div.isConnected) return;
         div.textContent = '';
